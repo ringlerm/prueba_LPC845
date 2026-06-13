@@ -1,0 +1,3 @@
+[submodule "lib/mcuframework"]
+	path = lib/mcuframework
+	url = https://github.com/ringlerm/mcuframework.git

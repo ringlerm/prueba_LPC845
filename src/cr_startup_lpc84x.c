@@ -18,17 +18,17 @@
 // retain, install, activate or otherwise use the software.
 //*****************************************************************************
 
-#if defined (__cplusplus)
-#ifdef __REDLIB__
-#error Redlib does not support C++
-#else
+#if defined (__cplusplus) || defined (__USE_CXX_INIT)
 //*****************************************************************************
 //
 // The entry point for the C++ library startup
 //
 //*****************************************************************************
+#if defined (__cplusplus)
 extern "C" {
+#endif
     extern void __libc_init_array(void);
+#if defined (__cplusplus)
 }
 #endif
 #endif
@@ -286,7 +286,7 @@ ResetISR(void) {
     SystemInit();
 #endif
 
-#if defined (__cplusplus)
+#if defined (__cplusplus) || defined (__USE_CXX_INIT)
     //
     // Call C++ library initialisation
     //

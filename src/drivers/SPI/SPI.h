@@ -52,16 +52,19 @@ class SPI : protected std::vector<Gpio>, public SyncCommSPI {
         uint8_t m_sendBufferIndexIn;
         uint8_t m_sendBufferIndexOut;
         bool m_isSending;
+        bool m_hasMISO;
     public:
 		enum channelSPI_t { SPI_CHANNEL0, SPI_CHANNEL1 };
 
 		SPI(const Gpio& SCK, const Gpio& MOSI, const Gpio& MISO, frequencyComm_t frequency = DEFAULT_FREQUENCY, channelSPI_t channel = SPI_CHANNEL0, bool master = true, bitOrder_t bitOrder = MSB_FIRST, mode_t mode = MODE0);
+		SPI(const Gpio& SCK, const Gpio& MOSI, frequencyComm_t frequency = DEFAULT_FREQUENCY, channelSPI_t channel = SPI_CHANNEL0, bool master = true, bitOrder_t bitOrder = MSB_FIRST, mode_t mode = MODE0);
 		bool bindSSEL(const Gpio& SSEL, uint8_t &bindedSSEL);
 		bool unbindSSEL(uint8_t unbindedSSEL);
         void setBaudRate(frequencyComm_t frequency);
         void enableSSEL(uint8_t SSEL);
         void disableSSEL(uint8_t SSEL);
         void transmitBytes(uint8_t *message, uint8_t length = 1) override;
+        void transmitByteBlocking(uint8_t data);
         void transmit(const char *message) override;
         bool receiveBytes(uint8_t *address, uint8_t *message, uint8_t length, bool transmitStopByte = true) override;
         bool receive(uint8_t *address, uint8_t &message) override;

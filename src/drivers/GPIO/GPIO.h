@@ -3,8 +3,10 @@
 #ifndef GPIO_DRIVER_GPIO_H_
 #define GPIO_DRIVER_GPIO_H_
 
-#define OUTPUT	1
-#define INPUT	0
+enum gpioDirection_t {
+	INPUT = 0,
+	OUTPUT = 1
+};
 
 class Gpio {
 private:

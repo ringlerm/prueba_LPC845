@@ -13,14 +13,17 @@ uint8_t SPI::m_SPI1_SSELs = 0;
 SyncCommSPI *g_SPI[SPI_MAX_CHANNELS] = { nullptr, nullptr };
 
 SPI::SPI(const Gpio& SCK, const Gpio& MOSI, const Gpio& MISO, frequencyComm_t frequency, channelSPI_t channel, bool master, bitOrder_t bitOrder, mode_t mode) : std::vector<Gpio>({SCK, MOSI, MISO}),
-m_SPI{(SPI_Type *)(SPI0_BASE + channel * SPI_OFFSET_BASE)}, m_bindSSELs{0}, m_bitOrder{bitOrder}, m_receiveBufferIndexIn{0}, m_receiveBufferIndexOut{0}, m_sendBufferIndexIn{0}, m_sendBufferIndexOut{0}, m_isSending{false} {
-	if (this->m_SPI == SPI0 && g_SPI[SPI_CHANNEL0] != nullptr);
-	else if (this->m_SPI == SPI1 && g_SPI[SPI_CHANNEL1] != nullptr);
-	else { // Initialize the corresponding SPI channel.
-		enableClock();
-		enableSWM();
-		config(master, mode, frequency);
-	}
+m_SPI{(SPI_Type *)(SPI0_BASE + channel * SPI_OFFSET_BASE)}, m_bindSSELs{0}, m_bitOrder{bitOrder}, m_receiveBufferIndexIn{0}, m_receiveBufferIndexOut{0}, m_sendBufferIndexIn{0}, m_sendBufferIndexOut{0}, m_isSending{false}, m_hasMISO{true} {
+	enableClock();
+	enableSWM();
+	config(master, mode, frequency);
+}
+
+SPI::SPI(const Gpio& SCK, const Gpio& MOSI, frequencyComm_t frequency, channelSPI_t channel, bool master, bitOrder_t bitOrder, mode_t mode) : std::vector<Gpio>({SCK, MOSI}),
+m_SPI{(SPI_Type *)(SPI0_BASE + channel * SPI_OFFSET_BASE)}, m_bindSSELs{0}, m_bitOrder{bitOrder}, m_receiveBufferIndexIn{0}, m_receiveBufferIndexOut{0}, m_sendBufferIndexIn{0}, m_sendBufferIndexOut{0}, m_isSending{false}, m_hasMISO{false} {
+	enableClock();
+	enableSWM();
+	config(master, mode, frequency);
 }
 
 /*!
@@ -65,10 +68,18 @@ void SPI::config(bool master, mode_t mode, frequencyComm_t frequency) {
 	| ((CPOL * 0b1111) << SPI_CFG_SPOL0_SHIFT));	 	// Positive/Negative SSELs polarity
 
     this->m_SPI->DIV = (CLK_HZ / frequency) - 1;
-    this->m_SPI->TXDATCTL |= (0b111 << SPI_TXDATCTL_LEN_SHIFT); // 8 bits per transfer
+
+    /*
+     * TXDAT uses TXCTL as its control register. TXDATCTL is only used when
+     * data and control are written together in a single register access.
+     */
+    this->m_SPI->TXCTL =
+    	(0b111UL << SPI_TXCTL_LEN_SHIFT) |                  // 8 bits per transfer.
+		(0b1111UL << SPI_TXCTL_TXSSEL0_N_SHIFT) |           // Do not assert hardware SSELs.
+		SPI_TXCTL_RXIGNORE_MASK;                            // AD9833 does not use MISO.
+
     if (this->m_SPI == SPI0) NVIC->ISER[0] |= (1 << 0);      // Enable SPI0_IRQ
     else if (this->m_SPI == SPI1) NVIC->ISER[0] |= (1 << 1); // Enable SPI1_IRQ
-    this->m_SPI->TXDATCTL |= (0b1111 << SPI_TXDATCTL_TXSSEL0_N_SHIFT); // Not assert any SSELs
     this->m_SPI->CFG |= SPI_CFG_ENABLE_MASK; // Enable SPI channel
 }
 
@@ -213,6 +224,34 @@ void SPI::transmitBytes(uint8_t *message, uint8_t length) {
 }
 
 /*!
+ * @brief Sends one byte and waits until all eight clock pulses have completed.
+ *
+ * This blocking operation is intended for devices whose chip-select is
+ * controlled manually, such as the AD9833.
+ */
+void SPI::transmitByteBlocking(uint8_t data) {
+	while ((this->m_SPI->STAT & SPI_STAT_TXRDY_MASK) == 0U) {
+		// Wait until TXDAT can accept a new byte.
+	}
+
+	this->m_SPI->TXDATCTL =
+		SPI_TXDATCTL_TXDAT(data) |
+		(0b1111UL << SPI_TXDATCTL_TXSSEL0_N_SHIFT) |        // Do not assert hardware SSELs.
+		SPI_TXDATCTL_EOT_MASK |
+		SPI_TXDATCTL_RXIGNORE_MASK |
+		(0b111UL << SPI_TXDATCTL_LEN_SHIFT);                // 8 bits per transfer.
+
+	while ((this->m_SPI->STAT & SPI_STAT_MSTIDLE_MASK) == 0U) {
+		// Wait until the byte, including its final clock edge, is complete.
+	}
+
+	// A dummy received byte is generated even when MISO is not connected.
+	if ((this->m_SPI->STAT & SPI_STAT_RXRDY_MASK) != 0U) {
+		(void)this->m_SPI->RXDAT;
+	}
+}
+
+/*!
  * @brief Receive data over SPI communication.
  * @param address Pointer to the address for communication.
  * @param message Reference to a variable where the received message will be stored.
@@ -299,11 +338,27 @@ void SPI::enableClock(void) {
 void SPI::enableSWM(void) {
     SYSCON->SYSAHBCLKCTRL0 |= SYSCON_SYSAHBCLKCTRL0_SWM_MASK;
 	if (this->m_SPI == SPI0) {
-		SWM0->PINASSIGN.PINASSIGN3 &= (((at(SCK_IDX).getBit() + at(SCK_IDX).getPort() * 0x20) << 24) | ~(0xFF << 24));
-		SWM0->PINASSIGN.PINASSIGN4 &= ((((at(MOSI_IDX).getBit() + at(MOSI_IDX).getPort() * 0x20) << 0) | ((at(MISO_IDX).getBit() + at(MISO_IDX).getPort() * 0x20) << 8)) | ~(0xFFFF << 0));
+		SWM0->PINASSIGN.PINASSIGN3 =
+				(SWM0->PINASSIGN.PINASSIGN3 & ~(0xFFUL << 24)) |
+				((at(SCK_IDX).getBit() + at(SCK_IDX).getPort() * 0x20UL) << 24);
+		SWM0->PINASSIGN.PINASSIGN4 =
+				(SWM0->PINASSIGN.PINASSIGN4 & ~(0xFFUL << 0)) |
+				((at(MOSI_IDX).getBit() + at(MOSI_IDX).getPort() * 0x20UL) << 0);
+		if (m_hasMISO) {
+			SWM0->PINASSIGN.PINASSIGN4 =
+					(SWM0->PINASSIGN.PINASSIGN4 & ~(0xFFUL << 8)) |
+					((at(MISO_IDX).getBit() + at(MISO_IDX).getPort() * 0x20UL) << 8);
+		}
 	} else if (this->m_SPI == SPI1) {
-		SWM0->PINASSIGN.PINASSIGN5 &= ((((at(SCK_IDX).getBit() + at(SCK_IDX).getPort() * 0x20) << 16) | ((at(MOSI_IDX).getBit() + at(MOSI_IDX).getPort() * 0x20) << 24)) | ~(0xFFFF << 16));
-		SWM0->PINASSIGN.PINASSIGN6 &= (((at(MISO_IDX).getBit() + at(MISO_IDX).getPort() * 0x20) << 0) | ~(0xFF << 0));
+		SWM0->PINASSIGN.PINASSIGN5 =
+				(SWM0->PINASSIGN.PINASSIGN5 & ~(0xFFFFUL << 16)) |
+				((at(SCK_IDX).getBit() + at(SCK_IDX).getPort() * 0x20UL) << 16) |
+				((at(MOSI_IDX).getBit() + at(MOSI_IDX).getPort() * 0x20UL) << 24);
+		if (m_hasMISO) {
+			SWM0->PINASSIGN.PINASSIGN6 =
+					(SWM0->PINASSIGN.PINASSIGN6 & ~(0xFFUL << 0)) |
+					((at(MISO_IDX).getBit() + at(MISO_IDX).getPort() * 0x20UL) << 0);
+		}
 	}
     SYSCON->SYSAHBCLKCTRL0 &= ~SYSCON_SYSAHBCLKCTRL0_SWM_MASK;
 }

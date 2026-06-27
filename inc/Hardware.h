@@ -1,9 +1,4 @@
-// DECLARACION DE HARDWARE
-#define PIN_PULSADOR       0, 4
 
 #define PIN_AD9833_FSYNC    0, 14
 #define PIN_AD9833_SCLK     0, 9
 #define PIN_AD9833_SDATA    0, 8
-
-
-#define ESTADO_PULSADOR_ON 0
